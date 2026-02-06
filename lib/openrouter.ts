@@ -1,7 +1,7 @@
 export async function parseFormWithAI(fileUrl: string, mimeType: string) {
-  const systemPrompt = `You are a form analysis AI. You analyze images and PDFs of forms and extract their structure.`;
+  const systemPrompt = `You are a form analysis AI. You analyze images of forms and extract their structure. Always respond with valid JSON only.`;
 
-  const userPrompt = `Analyze this form image/document and extract all fillable fields.
+  const userPrompt = `Analyze this form image and extract all fillable fields.
 Return a JSON object with:
 {
   "title": "Form title",
@@ -24,6 +24,18 @@ Rules:
 - Include all fields, even if partially visible
 - Return ONLY valid JSON, no markdown or extra text`;
 
+  // Fetch the file and convert to base64 data URL
+  const fileResponse = await fetch(fileUrl);
+  if (!fileResponse.ok) {
+    throw new Error(`Failed to fetch file: ${fileResponse.status}`);
+  }
+  const fileBuffer = await fileResponse.arrayBuffer();
+  const base64 = Buffer.from(fileBuffer).toString("base64");
+
+  // For PDFs, use image/png mime type as most vision models expect images
+  const imageMime = mimeType === "application/pdf" ? "application/pdf" : mimeType;
+  const dataUrl = `data:${imageMime};base64,${base64}`;
+
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -31,7 +43,7 @@ Rules:
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "google/gemini-2.0-flash-001",
+      model: "google/gemini-3-flash-preview",
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -39,13 +51,12 @@ Rules:
           content: [
             {
               type: "image_url",
-              image_url: { url: fileUrl },
+              image_url: { url: dataUrl },
             },
             { type: "text", text: userPrompt },
           ],
         },
       ],
-      response_format: { type: "json_object" },
     }),
   });
 
@@ -55,11 +66,27 @@ Rules:
   }
 
   const data = await response.json();
-  const content = data.choices[0]?.message?.content;
+
+  if (!data.choices || !data.choices[0]) {
+    throw new Error(`Unexpected AI response: ${JSON.stringify(data).substring(0, 500)}`);
+  }
+
+  const content = data.choices[0].message?.content;
 
   if (!content) {
     throw new Error("No content in AI response");
   }
 
-  return JSON.parse(content);
+  // Try to extract JSON from the response (model may wrap it in markdown)
+  let jsonStr = content.trim();
+  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[1].trim();
+  }
+
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    throw new Error(`Failed to parse AI response as JSON: ${content.substring(0, 300)}`);
+  }
 }

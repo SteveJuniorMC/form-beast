@@ -45,7 +45,8 @@ export default function NewFormPage() {
       });
 
       if (!parseResponse.ok) {
-        throw new Error("Failed to parse form");
+        const err = await parseResponse.json();
+        throw new Error(err.error || "Failed to parse form");
       }
 
       const parsed = await parseResponse.json();
@@ -74,7 +75,7 @@ export default function NewFormPage() {
       console.error("Upload error:", error);
       toast({
         title: "Error",
-        description: "Failed to process your form. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to process your form.",
         variant: "destructive",
       });
       setUploading(false);
